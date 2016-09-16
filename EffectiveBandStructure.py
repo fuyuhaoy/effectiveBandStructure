@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 '''
-Created on Sep 9, 2016
+Created on Sep 16, 2016
 
 @author: fu
 '''
@@ -18,6 +18,8 @@ class EffectiveBandStructure(object):
     Args:
         path: path of origin POSCAR excluding self-POSCAR
     '''
+
+
     def __init__(self, path=None):
         if path == None:
             self.path='./'
@@ -27,6 +29,10 @@ class EffectiveBandStructure(object):
                 print 'Warning! path is wrong.'
             elif not(os.path.isdir(self.path)):
                 print "Warning! not a directory."
+                
+        self.rstructures=[] # irreducible structure
+        self.weight=[] # weight of irreducible structures
+        self.irrlist=[] # array of irreducible structures
                 
     def read(self, filename='POSCAR'):
         poscar=Poscar.from_file(self.path+'/'+filename, True, True)
@@ -46,71 +52,130 @@ class EffectiveBandStructure(object):
         structure.make_supercell(size)
 
         atoms=structure.num_sites
-        rlist=np.array([x for x in itertools.combinations(range(atoms), numreplace)]) # save list of replacing atom
-        rstructures=[]
-        weight=[] # weight of irreducible structures
-        irrlist=[] # array of irreducible structures
+        rslist=np.array([x for x in itertools.combinations(range(atoms), numreplace)]) # save list of replacing site of atom
         
         pbar = ProgressBar(widgets=['Read: ', Percentage(), ' ', Bar(),
-                                    ' ', ETA()], maxval=len(rlist)).start()
-        counter=0 # number of irreducible structures
-        for i in xrange(0, len(rlist)):
+                                    ' ', ETA()], maxval=len(rslist)).start()
+        
+        counter=0 # total number of structures
+        icounter=0 # number of irreducible structures
+        for rs in rslist:
+            # replacing atom
             tmpstr=structure.copy()
-            tmpname='POSCAR-'+(flength-len(str(counter)))*'0'+str(counter)
-            for atom in rlist[i]:
-                tmpstr.replace(atom, elementType)
-                #tmpname=tmpname+'-'+str(atom) # index of replacing atom
-            tmpstr.sort()
+            tmpfilename='POSCAR-'+(flength-len(str(icounter)))*'0'+str(icounter)
+            for site in rs:
+                tmpstr.replace(site, elementType)
+            #tmpstr.sort()
             
             # category of structure
-            if rstructures == []:
-                rstructures.append(tmpstr)
-                weight.append(1)
-                irrlist.append(rlist[i])
-                counter+=1
-                tmpstr.to(fmt='poscar', filename=self.path+'/'+tmpname)
+            if self.rstructures == []:
+                self.rstructures.append(tmpstr)
+                self.weight.append(1)
+                self.irrlist.append(rs)
+                icounter+=1
+                tmpstr=tmpstr.get_primitive_structure(tolerance=0.01)
+                tmpstr.to(fmt='poscar', filename=self.path+'/'+tmpfilename)
             else:
-                isExist=False
-                for j in xrange(0, len(rstructures)):
-                    tmpstate=tmpstr.matches(rstructures[j])
-                    if tmpstate == True:
-                        isExist=True
-                        weight[j]=weight[j]+1
-                        irrlist[j]=np.vstack((irrlist[j], rlist[i]))
-                        break
-                    elif tmpstate == None:
-                        print 'Warning! '+str(rlist[i])
-                if not(isExist):
-                    rstructures.append(tmpstr)
-                    weight.append(1)
-                    irrlist.append(rlist[i])
-                    counter+=1
-                    tmpstr.to(fmt='poscar', filename=self.path+'/'+tmpname)
-                    
-            pbar.update(i)
-        irrlist=np.array(irrlist)
+                if not(self.exist(self.rstructures, tmpstr, rs)):
+                    self.rstructures.append(tmpstr)
+                    icounter+=1
+                    tmpstr=tmpstr.get_primitive_structure(tolerance=0.01)
+                    tmpstr.to(fmt='poscar', filename=self.path+'/'+tmpfilename)
+                
+            pbar.update(counter)
+            counter+=1
         pbar.finish()
         
-        # out weight and irrlist
-        with open(self.path+'/irreducible', 'w') as out:
+        # output weight and irrlist
+        self.outputWeightIrrlist(numreplace)
+        
+    def exist(self, structureSet, structure, rs):
+        '''
+        1. judge whether the structure exist in the set of structures
+        2. modify the weight and irrlist array according to the result of comparison
+        Args:
+            structureSet: set of irreducible structures
+            structure: comparing structure
+            rs: replacing site of this structure
+            
+        Return:
+            boolean value (True/False) of comparison
+        '''
+        counter=0
+        flag=False
+        while counter < len(structureSet) and not(flag):   
+            flag=structure.matches(structureSet[counter])
+            if flag == True:
+                self.weight[counter]+=1
+                self.irrlist[counter]=np.vstack((self.irrlist[counter],rs))
+                flag=True
+            elif flag == None:
+                print "Warning! "+str(rs)
+            counter+=1
+            
+        if flag == False:
+            self.weight.append(1)
+            self.irrlist.append(rs)
+        #print '>> '+str(counter), str(len(structureSet))
+        return flag
+    
+    def exist2(self, structureSet, structure, rs):
+        '''
+        1. judge whether the structure exist in the set of structures
+        2. modify the weight and irrlist array according to the result of comparison
+        Args:
+            structureSet: set of irreducible structures
+            structure: comparing structure
+            rs: replacing site of this structure
+            
+        Return:
+            boolean value (True/False) of comparison
+        '''
+        counter=0
+        flag=False
+        for s0 in structureSet:
+            flag=structure.matches(s0)
+            if flag == True:
+                self.weight[counter]+=1
+                self.irrlist[counter]=np.vstack((self.irrlist[counter],rs))
+                flag=True
+                break
+            elif flag == None:
+                print "Warning! "+str(rs)
+            counter+=1
+            
+        if flag == False:
+            self.weight.append(1)
+            self.irrlist.append(rs)
+        #print '>> '+str(counter), str(len(structureSet))
+        return flag
+    
+    def outputWeightIrrlist(self, numreplace, filename='irreducible'):
+        '''
+        output the weight and list of irreducible replacing
+        '''
+        with open(self.path+'/'+filename, 'w') as out:
             if numreplace == 1:
-                for i in xrange(0, len(weight)): # irreducible
-                    out.write('%d %6d' %(i, weight[i]))
-                    for j in xrange(0, len(irrlist[i])): # replacing
-                        out.write('\t[%d]' %(irrlist[i][j]))
+                for i in xrange(0, len(self.weight)): # irreducible
+                    out.write('%d %6d' %(i, self.weight[i]))
+                    for j in xrange(0, len(self.irrlist[i])): # replacing
+                        out.write('\t[%d]' %(self.irrlist[i][j]))
                     out.write('\n')
             else:           
-                for i in xrange(0, len(weight)): # irreducible
-                    out.write('%d %6d' %(i, weight[i]))
-                    for j in xrange(0, len(irrlist[i])): # ieplacing
+                for i in xrange(0, len(self.weight)): # irreducible
+                    out.write('%d %6d' %(i, self.weight[i]))
+                    for j in xrange(0, len(self.irrlist[i])): # replacing
                             out.write('\t[')
-                            for k in xrange(0, len(irrlist[i][j])): # atom
-                                if k == len(irrlist[i][j])-1:
-                                    out.write('%d]' %irrlist[i][j][k])
+                            for k in xrange(0, len(self.irrlist[i][j])): # atom
+                                if k == len(self.irrlist[i][j])-1:
+                                    out.write('%d]' %self.irrlist[i][j][k])
                                 else:
-                                    out.write('%d,' %irrlist[i][j][k])
+                                    out.write('%d,' %self.irrlist[i][j][k])
                     out.write('\n')
                     
+
 # -------------------- test --------------------
-e=EffectiveBandStructure('/home/fu/workspace/SeTe/alloy/333/3')
-e.getEffectiveBandStructure(numreplace=3)
+e=EffectiveBandStructure('/home/fu/workspace/SeTe/alloy/333/test/2')
+e.getEffectiveBandStructure(numreplace=2)                   
+
+        
